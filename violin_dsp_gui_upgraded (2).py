@@ -265,6 +265,8 @@ class DSPApp:
         notebook.pack(fill="x", padx=5, pady=5)
         cleanup = ttk.Frame(notebook); eq = ttk.Frame(notebook)
         dynamics = ttk.Frame(notebook); reverb = ttk.Frame(notebook)
+        experiment = ttk.Frame(notebook)
+        notebook.add(experiment, text="Experiment / Isolation")
         notebook.add(cleanup, text="Cleanup / Filters")
         notebook.add(eq, text="5-band EQ")
         notebook.add(dynamics, text="Compressor")
@@ -273,6 +275,7 @@ class DSPApp:
         self._build_eq(eq)
         self._build_compressor(dynamics)
         self._build_reverb(reverb)
+        self._build_experiment(experiment)
 
         settings_row = ttk.Frame(controls)
         settings_row.pack(fill="x", padx=5, pady=(0, 6))
@@ -371,6 +374,189 @@ class DSPApp:
         ttk.Button(row, text="Choose impulse response...", command=self.browse_ir).pack(side="left")
         ttk.Label(row, textvariable=self.ir_path, wraplength=500).pack(side="left", padx=6)
 
+    # Reference values used when one parameter is isolated.  They make a
+    # parameter audible while keeping every other parameter fixed.
+    EXPERIMENT_COMP_REFERENCE = {
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 15.0,
+        "release": 120.0,
+        "knee": 6.0,
+        "makeup": 0.0,
+    }
+    EXPERIMENT_REVERB_REFERENCE = {
+        "rt60": 1.5,
+        "damping": 0.50,
+        "predelay": 15.0,
+        "wet": 0.12,
+    }
+
+    def _build_experiment(self, parent):
+        """Controls for one-variable-at-a-time qualitative testing."""
+        self.experiment_mode = tk.BooleanVar(value=False)
+        self.experiment_vars = {}
+
+        top = ttk.Frame(parent)
+        top.pack(fill="x", padx=8, pady=(7, 4))
+        ttk.Checkbutton(
+            top,
+            text="Enable isolation mode",
+            variable=self.experiment_mode,
+            command=self._experiment_status,
+        ).pack(side="left")
+        ttk.Button(top, text="Clear selections", command=self._clear_experiment).pack(side="left", padx=8)
+
+        ttk.Label(
+            parent,
+            text=(
+                "Isolation mode is intended for controlled qualitative tests. Check one variable "
+                "to hear that variable while all unrelated DSP stages are bypassed. Parameters that "
+                "cannot operate alone (for example compressor attack or RT60) use fixed reference "
+                "values for the other required parameters. Multiple boxes may be checked if you "
+                "deliberately want a combined-condition test. Spectral denoising is file-mode only."
+            ),
+            wraplength=820,
+            justify="left",
+        ).pack(fill="x", padx=8, pady=(0, 7))
+
+        body = ttk.Frame(parent)
+        body.pack(fill="x", padx=5, pady=2)
+        left = ttk.Frame(body); left.pack(side="left", fill="both", expand=True, padx=3)
+        right = ttk.Frame(body); right.pack(side="left", fill="both", expand=True, padx=3)
+
+        cleanup = ttk.LabelFrame(left, text="Cleanup / filters")
+        cleanup.pack(fill="x", pady=3)
+        for key, label in (
+            ("denoise_strength", "Spectral denoise strength (offline)"),
+            ("gate_threshold", "Noise-gate threshold"),
+            ("hp_hz", "High-pass cutoff"),
+            ("lp_hz", "Low-pass cutoff"),
+        ):
+            self._experiment_check(cleanup, key, label)
+
+        eq_box = ttk.LabelFrame(left, text="EQ parameters")
+        eq_box.pack(fill="x", pady=3)
+        ttk.Label(eq_box, text="Band", width=14).grid(row=0, column=0, sticky="w", padx=4)
+        for col, name in enumerate(("Frequency", "Gain", "Q"), start=1):
+            ttk.Label(eq_box, text=name, width=11).grid(row=0, column=col, padx=2)
+        for i, (name, *_rest) in enumerate(self.EQ_DEFAULTS, start=1):
+            ttk.Label(eq_box, text=name, width=14).grid(row=i, column=0, sticky="w", padx=4)
+            for col, suffix in enumerate(("freq", "gain", "q"), start=1):
+                key = f"eq{i-1}_{suffix}"
+                var = tk.BooleanVar(value=False)
+                self.experiment_vars[key] = var
+                ttk.Checkbutton(eq_box, variable=var, command=self._experiment_status).grid(
+                    row=i, column=col, padx=12
+                )
+
+        comp = ttk.LabelFrame(right, text="Compressor parameters")
+        comp.pack(fill="x", pady=3)
+        for key, label in (
+            ("threshold", "Threshold"), ("ratio", "Ratio"),
+            ("attack", "Attack"), ("release", "Release"),
+            ("knee", "Soft knee"), ("makeup", "Makeup gain"),
+        ):
+            self._experiment_check(comp, f"comp_{key}", label)
+
+        reverb = ttk.LabelFrame(right, text="Schroeder reverb parameters")
+        reverb.pack(fill="x", pady=3)
+        for key, label in (
+            ("rt60", "RT60"), ("damping", "HF damping"),
+            ("predelay", "Pre-delay"), ("wet", "Wet level"),
+        ):
+            self._experiment_check(reverb, f"reverb_{key}", label)
+
+        self.experiment_status = tk.StringVar(value="Isolation mode off — normal DSP controls are active.")
+        ttk.Label(
+            parent, textvariable=self.experiment_status, foreground="gray",
+            wraplength=820, justify="left"
+        ).pack(fill="x", padx=8, pady=(6, 8))
+
+    def _experiment_check(self, parent, key, label):
+        var = tk.BooleanVar(value=False)
+        self.experiment_vars[key] = var
+        ttk.Checkbutton(parent, text=label, variable=var, command=self._experiment_status).pack(
+            anchor="w", padx=6, pady=1
+        )
+
+    def _clear_experiment(self):
+        for var in self.experiment_vars.values():
+            var.set(False)
+        self._experiment_status()
+
+    def _experiment_status(self):
+        if not hasattr(self, "experiment_status"):
+            return
+        selected = [name for name, var in self.experiment_vars.items() if var.get()]
+        if not self.experiment_mode.get():
+            self.experiment_status.set("Isolation mode off — normal DSP controls are active.")
+        elif not selected:
+            self.experiment_status.set("Isolation mode on — no variables selected, so the DSP path is neutral/raw.")
+        else:
+            pretty = ", ".join(selected)
+            self.experiment_status.set(f"Isolation mode on — active test variable(s): {pretty}")
+
+    def _experiment_metadata(self):
+        return {
+            "enabled": bool(self.experiment_mode.get()),
+            "selected": {name: bool(var.get()) for name, var in self.experiment_vars.items()},
+        }
+
+    def _apply_experiment_isolation(self, settings):
+        """Return effective settings for controlled one-variable-at-a-time tests."""
+        exp = settings.get("experiment", {})
+        if not exp.get("enabled"):
+            return settings
+        selected = exp.get("selected", {})
+        s = dict(settings)
+
+        # Unrelated stages are off unless their test variable is selected.
+        s["denoise"] = bool(selected.get("denoise_strength"))
+        s["gate"] = bool(selected.get("gate_threshold"))
+        s["hp"] = bool(selected.get("hp_hz"))
+        s["lp"] = bool(selected.get("lp_hz"))
+
+        # Each EQ parameter may be isolated.  Disabled parameters for an active
+        # band are held at stable reference values so frequency/Q remain audible.
+        isolated_bands = []
+        for i, (enabled, freq, gain, q) in enumerate(settings["bands"]):
+            use_freq = bool(selected.get(f"eq{i}_freq"))
+            use_gain = bool(selected.get(f"eq{i}_gain"))
+            use_q = bool(selected.get(f"eq{i}_q"))
+            active = use_freq or use_gain or use_q
+            ref_name, ref_freq, ref_gain, ref_q = self.EQ_DEFAULTS[i]
+            # If the reference gain is exactly zero in a future preset, use a
+            # modest +2 dB so frequency and Q tests remain perceptible.
+            audible_ref_gain = ref_gain if abs(ref_gain) > 1e-6 else 2.0
+            isolated_bands.append((
+                active,
+                freq if use_freq else ref_freq,
+                gain if use_gain else audible_ref_gain,
+                q if use_q else ref_q,
+            ))
+        s["bands"] = isolated_bands
+
+        # Compressor: selecting any one parameter enables the compressor. Other
+        # parameters are held at the fixed reference values above.
+        comp_keys = ("threshold", "ratio", "attack", "release", "knee", "makeup")
+        comp_active = any(selected.get(f"comp_{key}") for key in comp_keys)
+        s["compress"] = bool(comp_active)
+        for key in comp_keys:
+            if not selected.get(f"comp_{key}"):
+                s[key] = self.EXPERIMENT_COMP_REFERENCE[key]
+
+        # Reverb: same principle.  A 12% reference wet mix makes RT60, damping,
+        # and pre-delay audible without requiring the Wet variable to be selected.
+        reverb_keys = ("rt60", "damping", "predelay", "wet")
+        reverb_active = any(selected.get(f"reverb_{key}") for key in reverb_keys)
+        s["reverb"] = bool(reverb_active)
+        s["mode"] = "Schroeder (RT60)"
+        for key in reverb_keys:
+            if not selected.get(f"reverb_{key}"):
+                s[key] = self.EXPERIMENT_REVERB_REFERENCE[key]
+
+        return s
+
     def browse_file(self):
         path = filedialog.askopenfilename(title="Select a WAV file", initialdir=DOWNLOADS_DIR,
                                           filetypes=[("WAV files", "*.wav"), ("Audio files", "*.wav *.flac *.aiff")])
@@ -391,8 +577,8 @@ class DSPApp:
                                           filetypes=[("WAV files", "*.wav"), ("Audio files", "*.wav *.flac *.aiff")])
         if path: self.ir_path.set(path)
 
-    def _settings(self):
-        return {
+    def _settings(self, effective=True):
+        settings = {
             "bands": [(b.enabled.get(), b.freq.get(), b.gain.get(), b.q.get()) for b in self.eq_controls],
             "denoise": self.denoise_on.get(), "denoise_strength": self.denoise_strength.get(),
             "gate": self.gate_on.get(), "gate_threshold": self.gate_threshold.get(),
@@ -402,7 +588,9 @@ class DSPApp:
             "makeup": self.comp_makeup.get(), "reverb": self.reverb_on.get(), "mode": self.reverb_mode.get(),
             "rt60": self.rt60.get(), "damping": self.damping.get(), "predelay": self.predelay.get(), "wet": self.wet.get(),
             "ir_path": self.ir_path.get(),
+            "experiment": self._experiment_metadata(),
         }
+        return self._apply_experiment_isolation(settings) if effective else settings
 
     def save_settings(self):
         """Save every Section 2 control to a portable JSON preset."""
@@ -418,7 +606,7 @@ class DSPApp:
         document = {
             "format": "violin-dsp-settings",
             "version": 1,
-            "settings": self._settings(),
+            "settings": self._settings(effective=False),
         }
         try:
             with open(path, "w", encoding="utf-8") as handle:
@@ -486,6 +674,15 @@ class DSPApp:
             control.freq.set(frequency)
             control.gain.set(gain)
             control.q.set(q)
+
+        experiment = settings.get("experiment")
+        if isinstance(experiment, dict):
+            self.experiment_mode.set(bool(experiment.get("enabled", False)))
+            selected = experiment.get("selected", {})
+            if isinstance(selected, dict):
+                for name, var in self.experiment_vars.items():
+                    var.set(bool(selected.get(name, False)))
+            self._experiment_status()
 
     def process_audio(self):
         if self.audio is None:
