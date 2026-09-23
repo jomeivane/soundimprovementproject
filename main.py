@@ -190,9 +190,9 @@ class LiveDSPChain:
         for eq_filter in self.eq: y = eq_filter.process(y)
         if self.compressor: y = self.compressor.process(y)
         if self.reverb: y = self.reverb.process(y)
-        # Zero-delay safety saturation. It prevents runaway peaks without adding a
-        # look-ahead buffer to the monitoring latency.
-        return np.tanh(y * 1.1) / np.tanh(1.1)
+        # Keep the normal live path linear for controlled listening tests.
+        # Only samples outside the valid digital range are clipped.
+        return np.clip(y, -0.999, 0.999)
 
 
 class LiveDSPApp(DSPApp):
@@ -236,7 +236,7 @@ class LiveDSPApp(DSPApp):
 
         options = ttk.Frame(self.live_frame); options.pack(fill="x", padx=5, pady=3)
         self.live_samplerate = tk.IntVar(value=48000)
-        self.live_blocksize = tk.IntVar(value=256)
+        self.live_blocksize = tk.IntVar(value=512)
         self.live_channels = tk.IntVar(value=1)
         for label, variable, values in (
             ("Sample rate", self.live_samplerate, (44100, 48000, 96000)),
