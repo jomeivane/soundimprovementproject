@@ -299,8 +299,18 @@ class DSPApp:
         spectrum_tab = ttk.Frame(self.plot_tabs); spectrogram_tab = ttk.Frame(self.plot_tabs)
         self.plot_tabs.add(spectrum_tab, text="Spectrum")
         self.plot_tabs.add(spectrogram_tab, text="Spectrogram")
-        self.fig_spectrum, self.ax_spectrum = plt.subplots(figsize=(7.5, 3.1))
-        self.fig_specgram, (self.ax_spec_original, self.ax_spec_processed) = plt.subplots(2, 1, figsize=(7.5, 4.6), sharex=True)
+        # Create figures directly instead of through pyplot so TkAgg does not
+        # create separate top-level Matplotlib windows. These figures are shown
+        # only in the embedded Tkinter canvases below.
+        from matplotlib.figure import Figure
+        self.fig_spectrum = Figure(figsize=(7.5, 3.1))
+        self.ax_spectrum = self.fig_spectrum.add_subplot(111)
+
+        self.fig_specgram = Figure(figsize=(7.5, 4.6))
+        self.ax_spec_original = self.fig_specgram.add_subplot(211)
+        self.ax_spec_processed = self.fig_specgram.add_subplot(
+            212, sharex=self.ax_spec_original
+        )
         self.canvas_spectrum = FigureCanvasTkAgg(self.fig_spectrum, master=spectrum_tab)
         self.canvas_spectrum.get_tk_widget().pack(fill="both", expand=True)
         self.canvas_specgram = FigureCanvasTkAgg(self.fig_specgram, master=spectrogram_tab)
